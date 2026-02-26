@@ -86,7 +86,7 @@ docker run -it node:alpine sh
 Contenedor con límite de memoria:
 
 ```bash
-docker run -m 50m progrium/stress --vm 1 --vm-bytes 100M
+docker run -m 50m polinux/stress stress --vm 1 --vm-bytes 100M
 ```
 
 Ver salida:
@@ -113,6 +113,7 @@ Objetivo: comprobar persistencia real
 Sin volumen:
 ```bash
 docker run -d --name pg -e POSTGRES_PASSWORD=1234 postgres
+docker exec -t pg pg_dumpall -U postgres > backup.sql
 ```
 
 Entrar:
@@ -141,7 +142,7 @@ docker volume create pgdata
 ```bash
 docker run -d --name pg2 \
 -e POSTGRES_PASSWORD=1234 \
--v pgdata:/var/lib/postgresql/data \
+-v pgdata:/var/lib/postgresql \
 postgres
 ```
 
