@@ -5,8 +5,6 @@ import config
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
 
-password1="Hola"
-
 def get_db():
     conn = sqlite3.connect(config.DATABASE)
     conn.row_factory = sqlite3.Row
