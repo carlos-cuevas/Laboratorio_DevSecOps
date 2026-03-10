@@ -1,0 +1,4 @@
+fileignoreconfig:
+- filename: App_python/config.py
+  checksum: 03fdd0373192652bc5d779d53302dcf1977ee2d5b18b6f03f062921c6b931f76
+version: "1.0"

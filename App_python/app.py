@@ -4,7 +4,6 @@ import config
 
 app = Flask(__name__)
 app.secret_key = config.SECRET_KEY
-password = "Hola"
 
 def get_db():
     conn = sqlite3.connect(config.DATABASE)
@@ -73,7 +72,6 @@ def dashboard():
         conn = get_db()
         cur = conn.cursor()
 
-        # SQL Injection intencional
         query = f"SELECT * FROM users WHERE username LIKE '%{search}%'"
 
         results = cur.execute(query).fetchall()
@@ -87,4 +85,4 @@ def logout():
     return redirect("/login")
 
 if __name__ == "__main__":
-    app.run(debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=True)
