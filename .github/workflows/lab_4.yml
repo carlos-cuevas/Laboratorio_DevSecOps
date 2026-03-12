@@ -66,20 +66,6 @@ jobs:
           name: gitleaks-report
           path: gitleaks-report.sarif
 
-            # =========================
-      # SAST – HORUSEC
-      # =========================
-      - name: Ejecutar Horusec 
-        run: |
-          curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/master/deployments/scripts/install.sh | bash -s latest
-          horusec start -p ./WebGoat -D -o json -O horusec-report.json || true
-
-      - name: Subir resultados de Horusec 
-        uses: actions/upload-artifact@v4
-        with:
-          name: horusec-report
-          path: horusec-report.json
-
       # =========================
       # SAST – SEMGREP
       # =========================
@@ -144,7 +130,7 @@ jobs:
       - name: Ejecutar Checkov 
         run: |
           pip install -U checkov
-          checkov -d . --output json --soft-fail > checkov-report.json
+          checkov -d . -o sarif --output-file-path checkov.sarif --soft-fail
 
       - name: Upload Checkov report
         uses: actions/upload-artifact@v4
