@@ -1,0 +1,230 @@
+name: Capacitacion-Inbursa-2026
+
+on:
+  push:
+    branches: [ "main", "Capacitación_Inbursa_2026", "develop" ]
+  pull_request:
+
+jobs:
+  setup:
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+      issues: write 
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+  laboratorio_4:
+    needs: setup
+    runs-on: ubuntu-latest
+    permissions:
+      security-events: write
+      actions: read
+      contents: read
+      issues: write 
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      # =========================
+      # WebGoat
+      # =========================
+      - name: Clonar WebGoat
+        run: |
+          git clone https://github.com/WebGoat/WebGoat
+
+      # =========================
+      # SECRET SCANNING
+      # =========================
+
+      - name: Ejecutar Gitleaks
+        shell: bash
+        run: |
+          docker run --rm \
+            -v "$PWD:/repo" \
+            ghcr.io/gitleaks/gitleaks:latest \
+            detect \
+            --source /repo \
+            --report-format sarif \
+            --report-path /repo/gitleaks-report.sarif \
+            --no-git
+        continue-on-error: true
+
+      - name: Subir resultados de Gitleaks
+        uses: actions/upload-artifact@v4
+        with:
+          name: gitleaks-report
+          path: gitleaks-report.sarif
+
+            # =========================
+      # SAST – HORUSEC
+      # =========================
+      - name: Ejecutar Horusec 
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/ZupIT/horusec/master/deployments/scripts/install.sh | bash -s latest
+          horusec start -p ./WebGoat -D -o json -O horusec-report.json || true
+
+      - name: Subir resultados de Horusec 
+        uses: actions/upload-artifact@v4
+        with:
+          name: horusec-report
+          path: horusec-report.json
+
+      # =========================
+      # SAST – SEMGREP
+      # =========================
+      - name: Ejecutar Semgrep 
+        run: |
+          pip install semgrep
+          semgrep --config auto ./WebGoat --json > semgrep-report.json || true
+
+      - name: Subir resultados de Semgrep 
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: semgrep-report.json
+
+      # =========================
+      # SCA – DEPENDENCY CHECK
+      # =========================
+      - name: Ejecutar Dependency-Check (Action)
+        uses: dependency-check/Dependency-Check_Action@main
+        id: dependency_check
+        with:
+          project: WebGoat
+          path: ./WebGoat
+          format: JSON
+          out: 'dependency-check-report'
+          args: >
+            --failOnCVSS 11
+            --enableRetired
+        continue-on-error: true
+
+      - name: Subir resultados de Dependency-Check
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-check-report
+          path: ./dependency-check-report/dependency-check-report.json
+
+      # =========================
+      # IMAGE SCAN – TRIVY
+      # =========================
+      - name: Pull WebGoat image
+        run: docker pull webgoat/webgoat
+
+      - name: Ejecutar Trivy 
+        uses: aquasecurity/trivy-action@0.35.0
+        with:
+          image-ref: 'webgoat/webgoat'
+          format: 'json'
+          output: 'trivy-report.json'
+          ignore-unfixed: true
+          timeout: 25m
+        continue-on-error: true
+
+      - name: Subir resultados de Trivy 
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-report
+          path: trivy-report.json
+
+      # =========================
+      # IMAGE SCAN – CHECKOV
+      # =========================
+      - name: Ejecutar Checkov 
+        run: |
+          pip install -U checkov
+          checkov -d . --output json --soft-fail > checkov-report.json
+
+      - name: Upload Checkov report
+        uses: actions/upload-artifact@v4
+        with:
+          name: checkov-report
+          path: checkov-report.json
+
+      # =========================
+      # DAST – OWASP ZAP
+      # =========================
+      - name: Ejecutar OWASP ZAP 
+        run: |
+          mkdir -p zap-results
+          chmod 777 zap-results
+
+          docker pull webgoat/webgoat
+          docker run -d --name webgoat -p 8080:8080 webgoat/webgoat
+          sleep 40
+
+          docker run --rm \
+            --network host \
+            -v $(pwd)/zap-results:/zap/wrk \
+            zaproxy/zap-stable \
+            zap-baseline.py \
+            -t http://localhost:8080/WebGoat/login \
+            -J zap-report.json \
+            -I || true
+
+
+      - name: Subir resultados de OWASP ZAP 
+        uses: actions/upload-artifact@v4
+        with:
+          name: zap-report
+          path: zap-results/zap-report.json
+
+      # =========================
+      # POLICY AS CODE – OPA
+      # =========================
+      - name: Instalar OPA
+        run: |
+          sudo apt update
+          sudo apt upgrade -y
+          curl -L -o opa https://github.com/open-policy-agent/opa/releases/download/v0.70.0/opa_linux_amd64_static
+          chmod +x opa
+          sudo mv opa /usr/local/bin/opa
+          opa version
+
+
+      - name: Evaluar politicas
+        run: |
+          opa eval -i trivy-report.json -d policy/trivy.rego 'data.policy.violation'
+          opa eval -i checkov-report.json -d policy/checkov.rego 'data.policy.violation'
+          opa eval -i semgrep-report.json -d policy/semgrep.rego 'data.semgrep.vulnerability_class'
+          opa eval -i zap-results/zap-report.json -d policy/zap.rego 'data.alert_check.detected_alerts'
+
+      # =========================
+      # Visualización de resultados
+      # =========================
+
+      - name: Generación de reportes en formato SARIF 
+        run: |
+          semgrep --config auto ./WebGoat --sarif > semgrep.sarif
+          trivy image webgoat/webgoat --format sarif --output trivy.sarif --ignore-unfixed --exit-code 0
+
+      - name: Semgrep SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: semgrep.sarif
+
+      - name: Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy.sarif
+
+      - name: Checkov SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: checkov.sarif
+
+      - name: Gitleaks SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gitleaks-report.sarif
