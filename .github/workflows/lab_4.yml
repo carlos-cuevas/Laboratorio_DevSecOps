@@ -2,7 +2,7 @@ name: Capacitacion-Inbursa-2026
 
 on:
   push:
-    branches: [ "main", "Capacitación_Inbursa_2026", "develop" ]
+    branches: [ "main",  ]
   pull_request:
 
 jobs:
@@ -130,7 +130,7 @@ jobs:
       - name: Ejecutar Checkov 
         run: |
           pip install -U checkov
-          checkov -d . -o sarif --output-file-path checkov.sarif --soft-fail
+          checkov -d . -o json -o sarif --output-file-path checkov-report.json,checkov.sarif --soft-fail
 
       - name: Upload Checkov report
         uses: actions/upload-artifact@v4
