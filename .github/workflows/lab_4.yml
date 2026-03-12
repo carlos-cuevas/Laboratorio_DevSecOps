@@ -48,6 +48,7 @@ jobs:
       # =========================
 
       - name: Ejecutar Gitleaks
+        needs: Clonar WebGoat
         shell: bash
         run: |
           docker run --rm \
@@ -61,6 +62,7 @@ jobs:
         continue-on-error: true
 
       - name: Subir resultados de Gitleaks
+        needs: Ejecutar Gitleaks
         uses: actions/upload-artifact@v4
         with:
           name: gitleaks-report
@@ -69,12 +71,14 @@ jobs:
       # =========================
       # SAST – SEMGREP
       # =========================
-      - name: Ejecutar Semgrep 
+      - name: Ejecutar Semgrep
+        needs: Clonar WebGoat 
         run: |
           pip install semgrep
           semgrep --config auto ./WebGoat --json > semgrep-report.json || true
 
-      - name: Subir resultados de Semgrep 
+      - name: Subir resultados de Semgrep
+        needs: Ejecutar Semgrep
         uses: actions/upload-artifact@v4
         with:
           name: semgrep-report
@@ -83,7 +87,8 @@ jobs:
       # =========================
       # SCA – DEPENDENCY CHECK
       # =========================
-      - name: Ejecutar Dependency-Check (Action)
+      - name: Ejecutar Dependency-Check
+        needs: Clonar WebGoat
         uses: dependency-check/Dependency-Check_Action@main
         id: dependency_check
         with:
@@ -97,6 +102,7 @@ jobs:
         continue-on-error: true
 
       - name: Subir resultados de Dependency-Check
+        needs: Ejecutar Dependency-Check
         uses: actions/upload-artifact@v4
         with:
           name: dependency-check-report
@@ -118,7 +124,8 @@ jobs:
           timeout: 25m
         continue-on-error: true
 
-      - name: Subir resultados de Trivy 
+      - name: Subir resultados de Trivy
+        needs: Ejecutar Trivy 
         uses: actions/upload-artifact@v4
         with:
           name: trivy-report
@@ -127,12 +134,14 @@ jobs:
       # =========================
       # IMAGE SCAN – CHECKOV
       # =========================
-      - name: Ejecutar Checkov 
+      - name: Ejecutar Checkov
+        needs: Clonar WebGoat 
         run: |
           pip install -U checkov
           checkov -d . -o sarif --output-file-path checkov.sarif --soft-fail
 
       - name: Upload Checkov report
+        needs: Ejecutar Checkov
         uses: actions/upload-artifact@v4
         with:
           name: checkov-report
@@ -141,7 +150,8 @@ jobs:
       # =========================
       # DAST – OWASP ZAP
       # =========================
-      - name: Ejecutar OWASP ZAP 
+      - name: Ejecutar OWASP ZAP
+        needs: Clonar WebGoat 
         run: |
           mkdir -p zap-results
           chmod 777 zap-results
@@ -160,7 +170,8 @@ jobs:
             -I || true
 
 
-      - name: Subir resultados de OWASP ZAP 
+      - name: Subir resultados de OWASP ZAP
+        needs: Ejecutar OWASP ZAP
         uses: actions/upload-artifact@v4
         with:
           name: zap-report
@@ -180,6 +191,7 @@ jobs:
 
 
       - name: Evaluar politicas
+        needs: [Ejecutar OWASP ZAP, Ejecutar Checkov, Ejecutar Trivy, Ejecutar Semgrep]
         run: |
           opa eval -i trivy-report.json -d policy/trivy.rego 'data.policy.violation'
           opa eval -i checkov-report.json -d policy/checkov.rego 'data.policy.violation'
@@ -190,27 +202,32 @@ jobs:
       # Visualización de resultados
       # =========================
 
-      - name: Generación de reportes en formato SARIF 
+      - name: Generación de reportes en formato SARIF
+        needs: Ejecutar Semgrep 
         run: |
           semgrep --config auto ./WebGoat --sarif > semgrep.sarif
           trivy image webgoat/webgoat --format sarif --output trivy.sarif --ignore-unfixed --exit-code 0
 
       - name: Semgrep SARIF
+        needs: Ejecutar Semgrep
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: semgrep.sarif
 
       - name: Trivy SARIF
+        needs: Ejecutar Trivy 
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy.sarif
 
       - name: Checkov SARIF
+        needs: Ejecutar Checkov
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: checkov.sarif
 
       - name: Gitleaks SARIF
+        needs: Ejecutar Gitleaks
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: gitleaks-report.sarif
