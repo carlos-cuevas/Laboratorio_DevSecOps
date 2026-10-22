@@ -1,0 +1,221 @@
+name: security_sast
+
+on:
+  push:
+    branches:
+      - "**"
+      
+  workflow_call:
+    inputs:
+      semgrep_policy_path:
+        required: true
+        type: string
+
+      enforcement:
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  sast-analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+
+    concurrency:
+      group: sast-${{ github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install semgrep
+
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
+      - name: Install OPA
+        uses: open-policy-agent/setup-opa@v2
+        with:
+          version: latest
+
+      - name: Run Semgrep
+        run: |
+          semgrep scan \
+            --config p/security-audit \
+            --config p/owasp-top-ten \
+            --include '**/*.js' \
+            --include '**/*.jsx' \
+            --include '**/*.mjs' \
+            --include '**/*.cjs' \
+            --include '**/*.ts' \
+            --include '**/*.tsx' \
+            --exclude venv \
+            --exclude env \
+            --exclude .venv \
+            --exclude node_modules \
+            --exclude .git \
+            --json \
+            --output semgrep-report.json || true
+
+      - name: Evaluate Semgrep Policy
+        continue-on-error: true
+        run: |
+          opa eval \
+            -i semgrep-report.json \
+            -d ${{ inputs.semgrep_policy_path }} \
+            'data.policy.violation' \
+            > opa-semgrep-result.json
+
+      - name: Upload SAST Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: sast-reports
+          path: semgrep-report.json
+
+      - name: Upload OPA Results
+        uses: actions/upload-artifact@v4
+        with:
+          name: opa-results
+          path: opa-semgrep-result.json
+
+      - name: SAST Security Summary
+        run: |
+          SEMGREP_COUNT=$(jq '.result[0].expressions[0].value // [] | length' opa-semgrep-result.json)
+          TOTAL_FINDINGS=$SEMGREP_COUNT
+
+          echo "TOTAL_FINDINGS=$TOTAL_FINDINGS" >> $GITHUB_ENV
+
+          echo "# 🛡️ SAST Security Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.enforcement }}" = "true" ]; then
+            if [ "$TOTAL_FINDINGS" -eq 0 ]; then
+              echo "## ✅ All Security Checks Passed" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "## ❌ Security Checks Failed" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            if [ "$TOTAL_FINDINGS" -eq 0 ]; then
+              echo "## ✅ Monitoring Completed" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "## ⚠️ Findings Detected (${TOTAL_FINDINGS})" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Tool | Findings | Status |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|----------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Semgrep | ${SEMGREP_COUNT} | $([ "$SEMGREP_COUNT" -gt 0 ] && echo '⚠️ Findings' || echo '✅ Passed') |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Repository | ${{ github.repository }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Branch | ${{ github.ref_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow | security_sast |" >> $GITHUB_STEP_SUMMARY
+
+          echo "SEMGREP_COUNT=$SEMGREP_COUNT" >> $GITHUB_ENV
+
+      - name: Security Checks Validation
+        continue-on-error: true
+        if: inputs.enforcement == true
+        run: |
+          SEMGREP_COUNT=$(jq '.result[0].expressions[0].value // [] | length' opa-semgrep-result.json)
+          TOTAL_FINDINGS=$SEMGREP_COUNT
+
+          echo "Total findings: $TOTAL_FINDINGS"
+          if [ "$TOTAL_FINDINGS" -gt 0 ]; then
+            echo "❌ Security Checks Failed"
+            exit 1
+          fi
+          echo "✅ All Security Checks Passed"
+
+      - name: Debug OPA Results
+        run: |
+          echo "===== SEMGREP ====="
+          cat opa-semgrep-result.json
+
+      - name: Crear o Actualizar GitHub Issue
+        if: env.TOTAL_FINDINGS != '0'
+        uses: actions/github-script@v7
+        env:
+          SEMGREP_COUNT: ${{ env.SEMGREP_COUNT }}
+          TOTAL_FINDINGS: ${{ env.TOTAL_FINDINGS }}
+        with:
+          script: |
+            const semgrepCount = process.env.SEMGREP_COUNT || '0';
+            const totalFindings = process.env.TOTAL_FINDINGS || '0';
+            const runUrl =
+              `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const issueTitle = '🚨 SAST Security Findings';
+            const issueBody = `
+            # 🚨 SAST Security Findings
+
+            Repository: ${context.repo.owner}/${context.repo.repo}
+            Branch: ${process.env.GITHUB_REF_NAME}
+            Run: ${process.env.GITHUB_RUN_NUMBER}
+
+            ## Findings
+
+            | Tool | Findings |
+            |---------|---------|
+            | Semgrep | ${semgrepCount} |
+
+            ## Summary
+
+            Total Findings: ${totalFindings}
+
+            ## Workflow Run
+
+            ${runUrl}
+
+            Workflow: security_sast
+            `;
+
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'sast-security'
+            });
+
+            if (existingIssues.data.length > 0) {
+              const issue = existingIssues.data[0];
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: issueBody
+              });
+              console.log(`Issue actualizado #${issue.number}`);
+            } else {
+              const newIssue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: issueBody,
+                labels: [
+                  'security',
+                  'sast-security',
+                  'automated'
+                ]
+              });
+              console.log(`Issue creado #${newIssue.data.number}`);
+            }
