@@ -10,6 +10,7 @@ on:
       semgrep_policy_path:
         required: true
         type: string
+        default: policies/main/sast/semgrep-policy.rego
 
       enforcement:
         required: false
