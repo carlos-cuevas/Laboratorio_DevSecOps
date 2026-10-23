@@ -4,8 +4,8 @@ on:
   push:
     branches:
       - "**"
-      
-  workflow_call:
+
+  workflow_dispatch:
     inputs:
       dockerfile_path:
         description: "Ruta del Dockerfile de la aplicación"
@@ -45,8 +45,8 @@ jobs:
 
       - name: Build application image
         env:
-          DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
-          BUILD_CONTEXT: ${{ inputs.build_context }}
+          DOCKERFILE_PATH: ${{ inputs.dockerfile_path || 'Dockerfile' }}
+          BUILD_CONTEXT: ${{ inputs.build_context || '.' }}
         run: |
           docker build \
             --file "$DOCKERFILE_PATH" \
@@ -55,8 +55,8 @@ jobs:
 
       - name: Start application container
         env:
-          APP_PORT: ${{ inputs.container_port }}
-          SCAN_PATH: ${{ inputs.scan_path }}
+          APP_PORT: ${{ inputs.container_port || 3000 }}
+          SCAN_PATH: ${{ inputs.scan_path || '/' }}
         run: |
           NETWORK_NAME="dast-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           CONTAINER_NAME="dast-app-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
