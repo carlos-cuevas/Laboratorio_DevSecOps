@@ -1,0 +1,122 @@
+name: security_dast
+
+on:
+  workflow_call:
+    inputs:
+      dockerfile_path:
+        description: "Ruta del Dockerfile de la aplicación"
+        required: false
+        type: string
+        default: Dockerfile
+
+      build_context:
+        description: "Contexto de construcción de Docker"
+        required: false
+        type: string
+        default: "."
+
+      container_port:
+        description: "Puerto HTTP que escucha la aplicación dentro del contenedor"
+        required: false
+        type: number
+        default: 3000
+
+      scan_path:
+        description: "Ruta inicial de la aplicación que analizará ZAP"
+        required: false
+        type: string
+        default: "/"
+
+permissions:
+  contents: read
+
+jobs:
+  dast-analysis:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Build application image
+        env:
+          DOCKERFILE_PATH: ${{ inputs.dockerfile_path }}
+          BUILD_CONTEXT: ${{ inputs.build_context }}
+        run: |
+          docker build \
+            --file "$DOCKERFILE_PATH" \
+            --tag dast-webapp:scan \
+            "$BUILD_CONTEXT"
+
+      - name: Start application container
+        env:
+          APP_PORT: ${{ inputs.container_port }}
+          SCAN_PATH: ${{ inputs.scan_path }}
+        run: |
+          NETWORK_NAME="dast-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          CONTAINER_NAME="dast-app-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+
+          docker network create "$NETWORK_NAME"
+          docker run --detach --rm \
+            --name "$CONTAINER_NAME" \
+            --network "$NETWORK_NAME" \
+            --network-alias dast-app \
+            dast-webapp:scan
+
+          echo "NETWORK_NAME=$NETWORK_NAME" >> "$GITHUB_ENV"
+          echo "CONTAINER_NAME=$CONTAINER_NAME" >> "$GITHUB_ENV"
+          echo "TARGET_URL=http://dast-app:${APP_PORT}${SCAN_PATH}" >> "$GITHUB_ENV"
+
+      - name: Wait for application
+        run: |
+          docker run --rm \
+            --network "$NETWORK_NAME" \
+            curlimages/curl:8.12.1 \
+            --silent --show-error --fail \
+            --output /dev/null \
+            --connect-timeout 2 \
+            --max-time 5 \
+            --retry 30 \
+            --retry-all-errors \
+            --retry-delay 2 \
+            --retry-max-time 120 \
+            "$TARGET_URL"
+
+      - name: Run OWASP ZAP DAST
+        id: zap
+        continue-on-error: true
+        run: |
+          mkdir -p zap-reports
+          chmod 777 zap-reports
+
+          docker run --rm \
+            --network "$NETWORK_NAME" \
+            --volume "$GITHUB_WORKSPACE/zap-reports:/zap/wrk/:rw" \
+            ghcr.io/zaproxy/zaproxy:stable \
+            zap-full-scan.py \
+            -t "$TARGET_URL" \
+            -m 2 \
+            -I \
+            -J zap-report.json \
+            -r zap-report.html
+
+      - name: Upload DAST reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-reports
+          path: |
+            zap-reports/zap-report.json
+            zap-reports/zap-report.html
+          if-no-files-found: warn
+
+      - name: Cleanup application container
+        if: always()
+        run: |
+          if [ -n "${CONTAINER_NAME:-}" ]; then
+            docker rm -f "$CONTAINER_NAME" || true
+          fi
+          if [ -n "${NETWORK_NAME:-}" ]; then
+            docker network rm "$NETWORK_NAME" || true
+          fi
