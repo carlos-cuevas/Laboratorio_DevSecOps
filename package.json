@@ -1,49 +1,9 @@
 {
-  "name": "dev-ease",
-  "version": "0.1.0",
+  "name": "login-typescript-sqli-lab",
+  "version": "1.0.0",
   "private": true,
-  "author": {
-    "name": "Madhur Goyal",
-    "email": "hi@mgoyal.com"
-  },
+  "type": "module",
   "scripts": {
-    "dev": "next dev --turbopack",
-    "build": "next build",
-    "start": "next start",
-    "lint": "next lint",
-    "validate:jsonld": "node scripts/validate-jsonld.mjs"
-  },
-  "dependencies": {
-    "@headlessui/react": "^2.2.0",
-    "@next/third-parties": "^15.0.4",
-    "@vercel/analytics": "^1.4.1",
-    "@vercel/speed-insights": "^1.1.0",
-    "ace-builds": "^1.43.0",
-    "dayjs": "^1.11.13",
-    "jose": "^5.9.6",
-    "js-yaml": "^4.1.1",
-    "jwt-encode": "^1.0.1",
-    "next": "15.0.7",
-    "next-pwa": "^5.6.0",
-    "react": "18.3.1",
-    "react-ace": "^14.0.1",
-    "react-dom": "18.3.1",
-    "react-tooltip": "^5.28.0",
-    "sonner": "^1.7.2",
-    "sql-formatter": "^15.4.9",
-    "uuid": "^11.0.3"
-  },
-  "devDependencies": {
-    "@types/js-yaml": "^4.0.9",
-    "@types/jwt-encode": "^1.0.3",
-    "@types/next-pwa": "^5.6.9",
-    "@types/node": "^20",
-    "@types/react": "^18",
-    "@types/react-dom": "^18",
-    "eslint": "^8",
-    "eslint-config-next": "15.0.3",
-    "postcss": "^8",
-    "tailwindcss": "^3.4.1",
-    "typescript": "^5"
+    "start": "node --experimental-strip-types src/server.ts"
   }
 }
