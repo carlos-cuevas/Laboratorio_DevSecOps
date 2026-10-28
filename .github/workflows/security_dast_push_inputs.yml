@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - "**"
-
-  workflow_call:
+      
     inputs:
       dockerfile_path:
         description: "Ruta del Dockerfile de la aplicación"
