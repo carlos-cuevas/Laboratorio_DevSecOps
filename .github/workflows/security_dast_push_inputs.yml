@@ -1,6 +1,10 @@
 name: security_dast
 
 on:
+  push:
+    branches:
+      - "**"
+
   workflow_dispatch:
     inputs:
       dockerfile_path:
