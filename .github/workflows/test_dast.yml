@@ -1,4 +1,4 @@
-name: DAST Security Validation
+name: DAST Security Validation TEST
 
 on:
   push:
