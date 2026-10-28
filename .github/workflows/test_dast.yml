@@ -1,0 +1,16 @@
+name: DAST Security Validation
+
+on:
+  push:
+    branches:
+      - insecure_typescript
+
+permissions:
+  security-events: write
+  contents: read
+  actions: read
+  issues: write
+
+jobs:
+  dast-main:
+    uses: ./.github/workflows/security_dast.yml

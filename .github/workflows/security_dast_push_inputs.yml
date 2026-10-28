@@ -1,48 +1,52 @@
 name: security_dast
 
 on:
-  push:
-    branches:
-      - "**"
-
+  workflow_call:
     inputs:
       dockerfile_path:
-        description: "Ruta del Dockerfile de la aplicación"
         required: false
         type: string
         default: Dockerfile
 
       build_context:
-        description: "Contexto de construcción de Docker"
         required: false
         type: string
         default: "."
 
       container_port:
-        description: "Puerto HTTP que escucha la aplicación dentro del contenedor"
         required: false
         type: number
         default: 3000
 
       scan_path:
-        description: "Ruta inicial de la aplicación que analizará ZAP"
         required: false
         type: string
         default: "/"
 
       zap_policy_path:
-        description: "Ruta de la política OPA para ZAP"
         required: false
         type: string
         default: policies/main/dast/zap-policy.rego
 
+      enforcement:
+        required: false
+        type: boolean
+        default: false
+
 permissions:
+  security-events: write
   contents: read
+  actions: read
+  issues: write
 
 jobs:
   dast-analysis:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+
+    concurrency:
+      group: dast-${{ github.ref }}
+      cancel-in-progress: true
 
     steps:
       - name: Checkout repository
@@ -67,6 +71,7 @@ jobs:
           CONTAINER_NAME="dast-app-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
 
           docker network create "$NETWORK_NAME"
+
           docker run --detach --rm \
             --name "$CONTAINER_NAME" \
             --network "$NETWORK_NAME" \
@@ -110,6 +115,11 @@ jobs:
             -J zap-report.json \
             -r zap-report.html
 
+      - name: Install jq
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y jq
+
       - name: Install OPA
         uses: open-policy-agent/setup-opa@v2
         with:
@@ -117,14 +127,20 @@ jobs:
 
       - name: Evaluate ZAP Policy
         continue-on-error: true
-        env:
-          ZAP_POLICY_PATH: ${{ inputs.zap_policy_path }}
         run: |
           opa eval \
             -i zap-reports/zap-report.json \
-            -d "$ZAP_POLICY_PATH" \
+            -d "${{ inputs.zap_policy_path }}" \
             'data.policy.violation' \
             > opa-zap-result.json
+
+      - name: Upload DAST Reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: dast-reports
+          path: |
+            zap-reports/zap-report.json
+            zap-reports/zap-report.html
 
       - name: Upload OPA Results
         uses: actions/upload-artifact@v4
@@ -132,15 +148,136 @@ jobs:
           name: opa-results
           path: opa-zap-result.json
 
-      - name: Upload DAST reports
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: DAST Security Summary
+        run: |
+          ZAP_COUNT=$(jq '.result[0].expressions[0].value // [] | length' opa-zap-result.json)
+          TOTAL_FINDINGS=$ZAP_COUNT
+
+          echo "TOTAL_FINDINGS=$TOTAL_FINDINGS" >> "$GITHUB_ENV"
+          echo "ZAP_COUNT=$ZAP_COUNT" >> "$GITHUB_ENV"
+
+          echo "# DAST Security Summary" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+
+          if [ "${{ inputs.enforcement }}" = "true" ]; then
+            if [ "$TOTAL_FINDINGS" -eq 0 ]; then
+              echo "## All Security Checks Passed" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "## Security Checks Failed" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          else
+            if [ "$TOTAL_FINDINGS" -eq 0 ]; then
+              echo "## Monitoring Completed" >> "$GITHUB_STEP_SUMMARY"
+            else
+              echo "## Findings Detected (${TOTAL_FINDINGS})" >> "$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Tool | Findings | Status |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|------|----------|--------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| OWASP ZAP | ${ZAP_COUNT} | $([ "$ZAP_COUNT" -gt 0 ] && echo 'Findings' || echo 'Passed') |" >> "$GITHUB_STEP_SUMMARY"
+
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Property | Value |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|----------|-------|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Repository | ${{ github.repository }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Branch | ${{ github.ref_name }} |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| Workflow | security_dast |" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Security Checks Validation
+        continue-on-error: true
+        if: inputs.enforcement == true
+        run: |
+          ZAP_COUNT=$(jq '.result[0].expressions[0].value // [] | length' opa-zap-result.json)
+
+          echo "Total findings: $ZAP_COUNT"
+
+          if [ "$ZAP_COUNT" -gt 0 ]; then
+            echo "Security Checks Failed"
+            exit 1
+          fi
+
+          echo "All Security Checks Passed"
+
+      - name: Debug OPA Results
+        run: |
+          echo "===== OWASP ZAP ====="
+          cat opa-zap-result.json
+
+      - name: Crear o Actualizar GitHub Issue
+        if: env.TOTAL_FINDINGS != '0'
+        uses: actions/github-script@v7
+        env:
+          ZAP_COUNT: ${{ env.ZAP_COUNT }}
+          TOTAL_FINDINGS: ${{ env.TOTAL_FINDINGS }}
         with:
-          name: dast-reports
-          path: |
-            zap-reports/zap-report.json
-            zap-reports/zap-report.html
-          if-no-files-found: warn
+          script: |
+            const zapCount = process.env.ZAP_COUNT || '0';
+            const totalFindings = process.env.TOTAL_FINDINGS || '0';
+
+            const runUrl =
+              `https://github.com/${context.repo.owner}/${context.repo.repo}/actions/runs/${process.env.GITHUB_RUN_ID}`;
+
+            const issueTitle = 'DAST Security Findings';
+
+            const issueBody = `
+            # DAST Security Findings
+
+            Repository: ${context.repo.owner}/${context.repo.repo}
+            Branch: ${process.env.GITHUB_REF_NAME}
+            Run: ${process.env.GITHUB_RUN_NUMBER}
+
+            ## Findings
+
+            | Tool | Findings |
+            |---------|---------|
+            | OWASP ZAP | ${zapCount} |
+
+            ## Summary
+
+            Total Findings: ${totalFindings}
+
+            ## Workflow Run
+
+            ${runUrl}
+
+            Workflow: security_dast
+            `;
+
+            const existingIssues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              state: 'open',
+              labels: 'dast-security'
+            });
+
+            if (existingIssues.data.length > 0) {
+              const issue = existingIssues.data[0];
+
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: issueBody
+              });
+
+              console.log(`Issue actualizado #${issue.number}`);
+            } else {
+              const newIssue = await github.rest.issues.create({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                title: issueTitle,
+                body: issueBody,
+                labels: [
+                  'security',
+                  'dast-security',
+                  'automated'
+                ]
+              });
+
+              console.log(`Issue creado #${newIssue.data.number}`);
+            }
 
       - name: Cleanup application container
         if: always()
@@ -148,6 +285,7 @@ jobs:
           if [ -n "${CONTAINER_NAME:-}" ]; then
             docker rm -f "$CONTAINER_NAME" || true
           fi
+
           if [ -n "${NETWORK_NAME:-}" ]; then
             docker network rm "$NETWORK_NAME" || true
           fi

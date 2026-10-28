@@ -1,7 +1,5 @@
 name: security_sast
-
-on:
-    
+on:   
   workflow_call:
     inputs:
       semgrep_policy_path:
