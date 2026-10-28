@@ -13,4 +13,4 @@ permissions:
 
 jobs:
   dast-main:
-    uses: ./.github/workflows/security_dast_push_inputs.yml
+    uses: .github/workflows/security_dast_push_inputs.yml
