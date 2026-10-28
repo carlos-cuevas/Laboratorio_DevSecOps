@@ -35,7 +35,7 @@ on:
         description: "Ruta de la política OPA para ZAP"
         required: false
         type: string
-        default: zap-policy.rego
+        default: policies/main/dast/zap-policy.rego
 
 permissions:
   contents: read
